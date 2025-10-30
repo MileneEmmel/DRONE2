@@ -20,7 +20,7 @@
 
  * Automatically generated file. DO NOT EDIT.
 
- * Espressif IoT Development Framework (ESP-IDF) 5.5.1 Configuration Header
+ * Espressif IoT Development Framework (ESP-IDF) 6.0.0 Configuration Header
 
  */
        
@@ -419,8 +419,14 @@ SECTIONS
      */
     
  . = ALIGN(4); 
+ __preinit_array_start = ABSOLUTE(.);
+    KEEP (*(.preinit_array))
+    __preinit_array_end = ABSOLUTE(.);
+    
+ . = ALIGN(4); 
  __init_array_start = ABSOLUTE(.);
-    KEEP (*(EXCLUDE_FILE (*crtend.* *crtbegin.*) .ctors SORT(.ctors.*)))
+    KEEP (*(SORT_BY_INIT_PRIORITY(EXCLUDE_FILE (*crtend.* *crtbegin.*) .ctors.*)))
+    KEEP (*(EXCLUDE_FILE (*crtend.* *crtbegin.*) .ctors))
     __init_array_end = ABSOLUTE(.);
     /* Addresses of memory regions reserved via SOC_RESERVE_MEMORY_REGION() */
     

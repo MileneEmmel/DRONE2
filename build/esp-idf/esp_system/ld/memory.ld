@@ -42,7 +42,7 @@
 
  * Automatically generated file. DO NOT EDIT.
 
- * Espressif IoT Development Framework (ESP-IDF) 5.5.1 Configuration Header
+ * Espressif IoT Development Framework (ESP-IDF) 6.0.0 Configuration Header
 
  */
        

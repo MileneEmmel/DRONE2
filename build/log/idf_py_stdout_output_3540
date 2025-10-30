@@ -1,0 +1,24 @@
+Command: cmake -G Ninja -DPYTHON_DEPS_CHECKED=1 -DPYTHON=c:\Users\milen\Drone2\DRONE\python_env\idf6.0_py3.11_env\Scripts\python.exe -DESP_PLATFORM=1 -DSDKCONFIG='c:\Users\milen\Drone2\DRONE\hello_world\sdkconfig' -DCCACHE_ENABLE=1 C:\Users\milen\Drone2\DRONE\hello_world
+-- Minimal build - ON
+-- ccache will be used for faster recompilation
+-- Building ESP-IDF components for target esp32
+-- ESP-TEE is currently supported only on the esp32c6;esp32h2;esp32c5 SoCs
+-- Project sdkconfig file C:/Users/milen/Drone2/DRONE/hello_world/sdkconfig
+-- Compiler supported targets: xtensa-esp-elf
+-- App "hello_world" version: 9a4c19a-dirty
+-- USING O3
+-- Adding linker script C:/Users/milen/Drone2/DRONE/hello_world/build/esp-idf/esp_system/ld/memory.ld
+-- Adding linker script C:/Users/milen/Drone2/DRONE/hello_world/build/esp-idf/esp_system/ld/sections.ld.in
+-- Adding linker script C:/esp-idf/components/esp_rom/esp32/ld/esp32.rom.ld
+-- Adding linker script C:/esp-idf/components/esp_rom/esp32/ld/esp32.rom.api.ld
+-- Adding linker script C:/esp-idf/components/esp_rom/esp32/ld/esp32.rom.libgcc.ld
+-- Adding linker script C:/esp-idf/components/esp_rom/esp32/ld/esp32.rom.newlib-data.ld
+-- Adding linker script C:/esp-idf/components/esp_rom/esp32/ld/esp32.rom.syscalls.ld
+-- Adding linker script C:/esp-idf/components/esp_rom/esp32/ld/esp32.rom.libc-funcs.ld
+-- Adding linker script C:/esp-idf/components/esp_rom/esp32/ld/esp32.rom.newlib-reent-funcs.ld
+-- Adding linker script C:/esp-idf/components/soc/esp32/ld/esp32.peripherals.ld
+-- Components: app_update bootloader bootloader_support cxx driver efuse esp_app_format esp_bootloader_format esp_coex esp_common esp_driver_ana_cmpr esp_driver_bitscrambler esp_driver_dac esp_driver_gpio esp_driver_gptimer esp_driver_i2c esp_driver_i2s esp_driver_ledc esp_driver_mcpwm esp_driver_parlio esp_driver_pcnt esp_driver_rmt esp_driver_sd_intf esp_driver_sdio esp_driver_sdm esp_driver_sdmmc esp_driver_sdspi esp_driver_spi esp_driver_tsens esp_driver_twai esp_driver_uart esp_driver_usb_serial_jtag esp_event esp_hal_i2c esp_hw_support esp_libc esp_mm esp_netif esp_netif_stack esp_partition esp_phy esp_pm esp_ringbuf esp_rom esp_security esp_system esp_timer esp_usb_cdc_rom_console esp_vfs_console esp_wifi esptool_py freertos hal heap log lwip main mbedtls nvs_flash partition_table pthread sdmmc soc spi_flash vfs wpa_supplicant xtensa
+-- Component paths: C:/esp-idf/components/app_update C:/esp-idf/components/bootloader C:/esp-idf/components/bootloader_support C:/esp-idf/components/cxx C:/esp-idf/components/driver C:/esp-idf/components/efuse C:/esp-idf/components/esp_app_format C:/esp-idf/components/esp_bootloader_format C:/esp-idf/components/esp_coex C:/esp-idf/components/esp_common C:/esp-idf/components/esp_driver_ana_cmpr C:/esp-idf/components/esp_driver_bitscrambler C:/esp-idf/components/esp_driver_dac C:/esp-idf/components/esp_driver_gpio C:/esp-idf/components/esp_driver_gptimer C:/esp-idf/components/esp_driver_i2c C:/esp-idf/components/esp_driver_i2s C:/esp-idf/components/esp_driver_ledc C:/esp-idf/components/esp_driver_mcpwm C:/esp-idf/components/esp_driver_parlio C:/esp-idf/components/esp_driver_pcnt C:/esp-idf/components/esp_driver_rmt C:/esp-idf/components/esp_driver_sd_intf C:/esp-idf/components/esp_driver_sdio C:/esp-idf/components/esp_driver_sdm C:/esp-idf/components/esp_driver_sdmmc C:/esp-idf/components/esp_driver_sdspi C:/esp-idf/components/esp_driver_spi C:/esp-idf/components/esp_driver_tsens C:/esp-idf/components/esp_driver_twai C:/esp-idf/components/esp_driver_uart C:/esp-idf/components/esp_driver_usb_serial_jtag C:/esp-idf/components/esp_event C:/esp-idf/components/esp_hal_i2c C:/esp-idf/components/esp_hw_support C:/esp-idf/components/esp_libc C:/esp-idf/components/esp_mm C:/esp-idf/components/esp_netif C:/esp-idf/components/esp_netif_stack C:/esp-idf/components/esp_partition C:/esp-idf/components/esp_phy C:/esp-idf/components/esp_pm C:/esp-idf/components/esp_ringbuf C:/esp-idf/components/esp_rom C:/esp-idf/components/esp_security C:/esp-idf/components/esp_system C:/esp-idf/components/esp_timer C:/esp-idf/components/esp_usb_cdc_rom_console C:/esp-idf/components/esp_vfs_console C:/esp-idf/components/esp_wifi C:/esp-idf/components/esptool_py C:/esp-idf/components/freertos C:/esp-idf/components/hal C:/esp-idf/components/heap C:/esp-idf/components/log C:/esp-idf/components/lwip C:/Users/milen/Drone2/DRONE/hello_world/main C:/esp-idf/components/mbedtls C:/esp-idf/components/nvs_flash C:/esp-idf/components/partition_table C:/esp-idf/components/pthread C:/esp-idf/components/sdmmc C:/esp-idf/components/soc C:/esp-idf/components/spi_flash C:/esp-idf/components/vfs C:/esp-idf/components/wpa_supplicant C:/esp-idf/components/xtensa
+-- Configuring done (23.6s)
+-- Generating done (2.2s)
+-- Build files have been written to: C:/Users/milen/Drone2/DRONE/hello_world/build

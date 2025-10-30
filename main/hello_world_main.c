@@ -59,21 +59,21 @@
 #define WCET_PERTURBATION_US 2000 // Carga extra para a perturbação
 
 // Rede WiFi
-#define WIFI_SSID "DIRCE801"
-#define WIFI_PASS "11042024"
+#define WIFI_SSID "A54"
+#define WIFI_PASS "asasasas"
 
 // IP e Porta do PC (Servidor TCP/UDP)
-#define PC_SERVER_IP   "192.168.0.12" // IP do PC (Servidor)
-#define PC_SERVER_PORT 6010           // Porta do PC (Servidor)
+#define PC_SERVER_IP   "10.171.199.73" // IP do PC (Servidor)
+#define PC_SERVER_PORT 6010            // Porta do PC (Servidor)
 
 // Política de escalonamento
-// #define POLICY_RATE_MONOTONIC
+#define POLICY_RATE_MONOTONIC
 // #define POLICY_DEADLINE_MONOTONIC
-#define POLICY_CUSTOM_CRITICALITY
+// #define POLICY_CUSTOM_CRITICALITY
 
 // Modo de MONITOR_TASK (TCP ou UDP)
 // Linha comentada: Cliente UDP // Linha descomentada: Cliente TCP
-#define MONITOR_MODE_TCP
+// #define MONITOR_MODE_TCP
 
 // Prioridades com base na política escolhida
 #ifdef POLICY_RATE_MONOTONIC
@@ -110,9 +110,9 @@
 static TaskHandle_t hFUS = NULL, hCTRL = NULL, hNAV = NULL, hFS = NULL; // Handles para referenciar as tarefas
 typedef enum { EV_NAV = 1, EV_TEL = 2 } nav_evt_t; // Eventos para NAV_PLAN (Navegação e Telemetria)
 static QueueHandle_t qNav = NULL; // Fila para NAV_PLAN - Escolhida por ser flexível e poder enviar dados (o tipo de evento).
-static SemaphoreHandle_t semFS = NULL; // Semáforo para o Fail-Safe - Escolhido por ser o mecanismo mais rápido para sinalizar de uma ISR
+static SemaphoreHandle_t semFS = NULL;           // Semáforo para o Fail-Safe - Escolhido por ser o mecanismo mais rápido para sinalizar de uma ISR
 static SemaphoreHandle_t semPerturbation = NULL; // Semáforo para a tarefa de perturbação.
-static SemaphoreHandle_t xStateMutex = NULL; // Mutex para simular recurso compartilhado (estado do drone)
+static SemaphoreHandle_t xStateMutex = NULL;     // Mutex para simular recurso compartilhado (estado do drone)
 
 // Struct para simular o estado (orientação) do drone
 typedef struct {
@@ -124,13 +124,15 @@ static state_t g_state = {0};
 volatile int64_t isr_event_timestamp = 0, isr_fs_timestamp = 0;
 
 // Métricas de WCRT para o relatório
-volatile int64_t fus_imu_wcrt_exec = 0;
-volatile int64_t ctrl_att_wcrt_exec = 0;
+volatile int64_t fus_imu_wcrt_exec      = 0;
+volatile int64_t ctrl_att_wcrt_exec     = 0;
+volatile int64_t nav_plan_wcrt_response = 0; 
+volatile int64_t fs_task_wcrt_response  = 0;
 
 // Contadores de deadline misses para o relatório
 static int fus_imu_misses = 0, ctrl_att_misses = 0, nav_plan_misses = 0, fs_task_misses = 0; 
 
-// Estrutura para rastrear quantas vezes cada tarefa é bloqueada ao tentar obter o xStateMutex.
+// Estrutura para rastrear bloqueios individuais por tarefa
 typedef struct {
     int fus_imu_blocks;      // Bloqueios sofridos pela FUS_IMU
     int ctrl_att_blocks;     // Bloqueios sofridos pela CTRL_ATT
@@ -141,13 +143,15 @@ typedef struct {
 static block_stats_t g_blocks = {0}; // Inicializa todos os contadores com zero
 
 // Variáveis para o cálculo total de (m,k)-firm sobre todos os eventos nav
-#define K_WINDOW_SIZE 10 // Janela de 10 execuções
-#define NAV_M_MIN      9 // m = 9 (Requisito mínimo para (9, 10)-firm)  
-volatile int mk_firm_buffer[K_WINDOW_SIZE] = {0}; // Buffer de 10 posições (0: miss, 1: hit)
-volatile int mk_firm_index = 0;    // Índice do buffer circular (0 a 9)
-volatile int mk_firm_failures = 0; // Contador de falhas (m < 9)
+#define K_WINDOW_SIZE 10 // (k) Janela de 10 execuções
+#define MK_FIRM_M 9      // (m) Mínimo de sucessos em k
 volatile uint64_t nav_total_runs    = 0; // Total de execuções de NAV_PLAN (k total)
 volatile uint64_t nav_total_success = 0; // Total de sucessos de NAV_PLAN (m total)
+
+// Variáveis para a janela deslizante
+static bool nav_window_outcomes[K_WINDOW_SIZE] = {false}; // Buffer circular dos últimos K resultados (true=sucesso)
+static int  nav_window_success_count = 0; // Contagem de sucessos na janela atual
+static int  nav_violation_count = 0;      // Número de vezes que a garantia (m,k) falhou
 
 // Variáveis para as estatísticas do relatório automático
 volatile uint64_t nav_event_count = 0;
@@ -162,15 +166,15 @@ volatile uint64_t rtt_count = 0;
 volatile uint64_t rtt_sum   = 0;
 volatile int64_t  rtt_max   = 0;
 
+#define TCP_RTT_BUFFER_SIZE 256
+static int64_t g_tcp_rtt_send_times[TCP_RTT_BUFFER_SIZE] = {0};
+
 #define HWM_BUFFER_SIZE 1000 // Salva as últimas 1000 latências
 static int64_t fs_latencies[HWM_BUFFER_SIZE]  = {0};
 static int64_t nav_latencies[HWM_BUFFER_SIZE] = {0};
 
 // Variável para controlar o tempo do debounce
 volatile int64_t last_isr_time = 0;
-
-// Controle do LED - desligamento seguro
-volatile int64_t led_off_time = 0;
 
 // SNTP
 static SemaphoreHandle_t xTimeMutex = NULL; // Protege as vars de tempo
@@ -210,7 +214,9 @@ static void wifi_init(void) {
     strcpy((char*)wifi_config.sta.ssid, WIFI_SSID);
     strcpy((char*)wifi_config.sta.password, WIFI_PASS);
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_LOGI(TAG, "Conectando ao WiFi %s...", WIFI_SSID);
     ESP_ERROR_CHECK(esp_wifi_connect());
@@ -239,8 +245,8 @@ static void task_fus_imu(void *arg) {
             xSemaphoreGive(xStateMutex);
         } else {
             // Se falhar, sofreu bloqueio/interferência por recurso (inversão de prioridade)
-            g_blocks.fus_imu_blocks++;
             ESP_LOGW(TAG, "FUS_IMU: Bloqueio no Mutex!"); 
+            g_blocks.fus_imu_blocks++;
         }
         cpu_tight_loop_us(WCET_FUS_IMU_US);
 
@@ -276,8 +282,8 @@ static void task_ctrl_att(void *arg) {
             xSemaphoreGive(xStateMutex);
         } else {
             // Se falhar, sofreu bloqueio/interferência por recurso (inversão de prioridade)
-            g_blocks.ctrl_att_blocks++;
             ESP_LOGW(TAG, "CTRL_ATT: Bloqueio no Mutex!"); 
+            g_blocks.ctrl_att_blocks++;
         }
 
         cpu_tight_loop_us(WCET_CTRL_ATT_US); // PID simulado com carga de 0,8ms
@@ -318,8 +324,8 @@ static void task_nav_plan(void *arg) {
                     printf("TEL: roll=%.2f pitch=%.2f yaw=%.2f\n", g_state.roll, g_state.pitch, g_state.yaw);
                     xSemaphoreGive(xStateMutex);
                 } else {
-                    g_blocks.nav_plan_blocks++;
                     ESP_LOGW(TAG, "NAV_PLAN: Bloqueio no Mutex!"); 
+                    g_blocks.nav_plan_blocks++;
                     printf("TEL: falha na leitura do estado\n");
                 }
                 cpu_tight_loop_us(WCET_TELEMETRY_US); // ~0,5ms
@@ -329,28 +335,40 @@ static void task_nav_plan(void *arg) {
             int64_t exec_time = (esp_timer_get_time() - task_start_time) / 1000;
             bool deadline_met = ((latency + exec_time) <= NAV_PLAN_DEADLINE_MS);
 
-            // Atualiza as métricas de (m,k)-firm
+            // Calcula o Tempo de Resposta Total (Latência + Execução)
+            int64_t response_time = latency + exec_time;
+            // Salva o WCRT (Pior Tempo de Resposta)
+            if (response_time > nav_plan_wcrt_response) {
+                nav_plan_wcrt_response = response_time;
+            }
+
+            // Atualiza contadores para (m,k)-firm (Taxa Total)
             nav_total_runs++; // k total
-            int is_success = deadline_met ? 1 : 0;
-            if (is_success) nav_total_success++; // m total
-
-            // Armazena o resultado no buffer circular
-            mk_firm_buffer[mk_firm_index] = is_success; // Adiciona o resultado
-            mk_firm_index = (mk_firm_index + 1) % K_WINDOW_SIZE; // Move o índice (desliza a janela)
-
-            // Calcula 'm' atual (total de sucessos na janela de K_WINDOW_SIZE)
-            int m_current = 0;
-            for (int i = 0; i < K_WINDOW_SIZE; i++) {
-                m_current += mk_firm_buffer[i];
+            if (deadline_met) {
+                nav_total_success++; // m total
             }
 
-            // Verifica a falha (m,k)-firm: a janela de K=10 não tem m=9 sucessos.
-            // Verifica se há amostras suficientes (janela cheia) e se o requisito mínimo foi violado
-            if (nav_total_runs >= K_WINDOW_SIZE && m_current < NAV_M_MIN) {
-                mk_firm_failures++;
-                ESP_LOGE(TAG, "M,K-FIRM FAILURE: (%d/%d) misses na janela de %d!", m_current, K_WINDOW_SIZE - m_current, K_WINDOW_SIZE);
-            }
+            // Encontra o índice do evento que vai "cair" da janela deslizante
+            uint64_t current_index = (nav_total_runs - 1) % K_WINDOW_SIZE;
             
+            // Remove o resultado antigo da contagem da janela deslizante
+            if (nav_window_outcomes[current_index] == true) {
+                nav_window_success_count--; // Era um sucesso, remove
+            }
+
+            // Adiciona o novo resultado (true=sucesso, false=falha)
+            nav_window_outcomes[current_index] = deadline_met;
+            if (deadline_met) {
+                nav_window_success_count++; // É um sucesso, adiciona
+            }
+
+            // Verifica a violação (começa a contar depois que a primeira janela está cheia)
+            if (nav_total_runs >= K_WINDOW_SIZE) {
+                if (nav_window_success_count < MK_FIRM_M) {
+                    nav_violation_count++;
+                }
+            }
+
             // Verifica o deadline
             if (!deadline_met) {
                 nav_plan_misses++;
@@ -373,6 +391,7 @@ static void task_nav_plan(void *arg) {
 static void task_fail_safe(void *arg) {
     for (;;) {
         if (xSemaphoreTake(semFS, portMAX_DELAY) == pdTRUE) { // Bloqueia até receber o sinal de emergência do ISR
+            gpio_set_level(LED_GPIO, 1); // Acende o LED
             int64_t task_start_time = esp_timer_get_time();
             int64_t latency = (task_start_time - isr_fs_timestamp) / 1000;
             
@@ -380,6 +399,8 @@ static void task_fail_safe(void *arg) {
 
             // Simula a rotina de pouso seguro.
             cpu_tight_loop_us(WCET_FS_TASK_US);
+            vTaskDelay(pdMS_TO_TICKS(200));
+            gpio_set_level(LED_GPIO, 0); // Desliga o LED
 
             // Verifica se a tarefa cumpriu seu deadline.
             int64_t exec_time = (esp_timer_get_time() - task_start_time) / 1000;
@@ -387,6 +408,14 @@ static void task_fail_safe(void *arg) {
                 fs_task_misses++;
                 ESP_LOGE(TAG, "DEADLINE MISS: FS_TASK (Total: %lld ms)", latency + exec_time);
             }
+
+            // Calcula o Tempo de Resposta Total (Latência + Execução)
+            int64_t response_time = latency + exec_time;
+            // Salva o WCRT (Pior Tempo de Resposta)
+            if (response_time > fs_task_wcrt_response) {
+                fs_task_wcrt_response = response_time;
+            }
+
             fs_latencies[fs_event_count % HWM_BUFFER_SIZE] = latency;
             fs_event_count++;
             fs_latency_sum += latency;
@@ -400,16 +429,17 @@ static void task_fail_safe(void *arg) {
 // Perturbação/Sobrecarga (Touch A)
 static void task_perturbation(void *arg) {
     for (;;) {
-        if (xSemaphoreTake(semPerturbation, portMAX_DELAY) == pdTRUE) {
+        if (xSemaphoreTake(semPerturbation, portMAX_DELAY) == pdTRUE) { // Bloqueia até receber o sinal do Touch A
             ESP_LOGI(TAG, "PERTURBAÇÃO: Touch A ativado. Injetando %d us de carga extra na CPU.", WCET_PERTURBATION_US);
+            
             // Simulação: Acesso ao recurso compartilhado (g_state) com espera longa (simulando inversão de prioridade)
             // Se essa tarefa tiver prioridade baixa, ela pode bloquear tarefas de prioridade alta (FUS_IMU/CTRL_ATT)
             if (xSemaphoreTake(xStateMutex, pdMS_TO_TICKS(50)) == pdTRUE) { 
-                 cpu_tight_loop_us(WCET_PERTURBATION_US);
-                 xSemaphoreGive(xStateMutex);
+                cpu_tight_loop_us(WCET_PERTURBATION_US);
+                xSemaphoreGive(xStateMutex);
             } else {
-                 g_blocks.perturbation_blocks++;
-                 ESP_LOGE(TAG, "PERTURBAÇÃO: Falha ao obter Mutex (muito ocupado?)"); 
+                g_blocks.perturbation_blocks++;
+                ESP_LOGE(TAG, "PERTURBAÇÃO: Falha ao obter Mutex (muito ocupado?)"); 
             }
             
             if (hCTRL) xTaskNotifyGive(hCTRL); // Notifica a tarefa de controle que um novo dado está pronto, gerando sobrecarga
@@ -428,8 +458,7 @@ static void process_command(char* rx_buffer) {
         ESP_LOGW(TAG, "Comando Rede: Ativando FS_TASK!");
         isr_fs_timestamp = esp_timer_get_time(); // Time stamp do evento via Rede
         xSemaphoreGive(semFS); // Ativa o Fail-Safe
-        gpio_set_level(LED_GPIO, 1); // Acende o LED
-        led_off_time = esp_timer_get_time() + (200 * 1000); // Define tempo para desligar o LED em 200ms
+
     } else if (strcmp(rx_buffer, "NAV_PLAN") == 0) {
         ESP_LOGW(TAG, "Comando Rede: Ativando NAV_PLAN!");
         isr_event_timestamp = esp_timer_get_time(); // Time stamp do evento via Rede
@@ -445,8 +474,7 @@ static void process_command(char* rx_buffer) {
 }
 
 // Monta o pacote de log em JSON
-static int build_log_packet(char* payload_buffer, int max_size) {   
-    static int seq = 0;
+static int build_log_packet(char* payload_buffer, int max_size, int seq) {   
     // Calcula médias
     int64_t nav_latency_avg = (nav_event_count > 0) ? (nav_latency_sum / nav_event_count) : 0;
     int64_t fs_latency_avg = (fs_event_count > 0) ? (fs_latency_sum / fs_event_count) : 0;
@@ -458,22 +486,19 @@ static int build_log_packet(char* payload_buffer, int max_size) {
         current_time_epoch = g_now;
         xSemaphoreGive(xTimeMutex);
     }
-    
+
     // Monta o pacote de log
     return snprintf(payload_buffer, max_size,
-                "{\"seq\":%d, \"policy\":\"%s\", \"time_epoch\":%lld, \"rtt_ms\":%lld, "
-                "\"hard_misses\":{\"fus\":%d, \"ctrl\":%d, \"fs\":%d}, "
-                "\"soft_misses\":{\"nav\":%d}, \"mk_firm_fails\":%d, "
-                "\"blocks\":{\"fus\":%d, \"ctrl\":%d, \"nav\":%d, \"pert\":%d, \"time\":%d}, " 
-                "\"fs_latency\":{\"avg\":%lld, \"max\":%lld, \"count\":%llu}, "
-                "\"nav_latency\":{\"avg\":%lld, \"max\":%lld, \"count\":%llu}}\n",
-                seq++, POLICY_NAME, (long long)current_time_epoch, (long long)rtt_latency_avg,
-                fus_imu_misses, ctrl_att_misses, fs_task_misses,
-                nav_plan_misses, mk_firm_failures,
-                g_blocks.fus_imu_blocks, g_blocks.ctrl_att_blocks,
-                g_blocks.nav_plan_blocks, g_blocks.perturbation_blocks, g_blocks.time_blocks,
-                fs_latency_avg, fs_latency_max, fs_event_count,
-                nav_latency_avg, nav_latency_max, nav_event_count);
+             "{\"seq\":%d, \"policy\":\"%s\", \"time_epoch\":%lld, \"rtt_ms\":%lld, "
+             "\"hard_misses\":{\"fus\":%d, \"ctrl\":%d, \"fs\":%d}, "
+             "\"soft_misses\":{\"nav\":%d}, "
+             "\"fs_latency\":{\"avg\":%lld, \"max\":%lld, \"count\":%llu}, "
+             "\"nav_latency\":{\"avg\":%lld, \"max\":%lld, \"count\":%llu}}\n",
+             seq, POLICY_NAME, (long long)current_time_epoch, (long long)rtt_latency_avg,
+             fus_imu_misses, ctrl_att_misses, fs_task_misses,
+             nav_plan_misses,
+             fs_latency_avg, fs_latency_max, fs_event_count,
+             nav_latency_avg, nav_latency_max, nav_event_count);
 }
 
 // Captura a hora de um servidor SNTP e monitora a sincronização - Periódica (T = 1s, D = 1s)
@@ -505,9 +530,9 @@ static void time_task(void *arg) {
             g_now = now_local;
             g_timeinfo = timeinfo_local;
             xSemaphoreGive(xTimeMutex);
-        } else {
+        }   else {
+            // Se falhar, contabiliza o bloqueio
             g_blocks.time_blocks++;
-            ESP_LOGW(TAG, "TIME_TASK: Bloqueio no xTimeMutex! (Total: %d)", g_blocks.time_blocks);
         }
         
         sntp_sync_status_t current_sync_status = esp_sntp_get_sync_status();
@@ -515,8 +540,8 @@ static void time_task(void *arg) {
         // Monitora ciclos desde a última atualização e avisa sobre sincronização
         if (current_sync_status == SNTP_SYNC_STATUS_RESET) {
             sntp_sync_cycles++;
-            if (sntp_sync_cycles % 5 == 0) { // Avisa a cada 5 ciclos (5s)
-                ESP_LOGW(TAG, "TIME_TASK: SNTP não sincronizado há %d ciclos (5s).", sntp_sync_cycles);
+            if (sntp_sync_cycles % 5 == 0) { // Avisa a cada 5s
+                ESP_LOGW(TAG, "TIME_TASK: SNTP não sincronizado há %ds.", sntp_sync_cycles);
             }
         } else if (current_sync_status == SNTP_SYNC_STATUS_COMPLETED && last_sync_status != SNTP_SYNC_STATUS_COMPLETED) {
             // Loga a sincronização recorrente
@@ -533,6 +558,7 @@ static void time_task(void *arg) {
 static void monitor_task_udp(void *arg) {
     char rx_buffer[256]; // Buffer para receber comandos
     char payload[512];   // Buffer para o JSON
+    static int s_udp_seq = 0; // Variável de sequência para UDP
     int64_t last_log_send_time = 0; // Timestamp do último envio de log
     const int loop_delay_ms   = 50;  // Delay do loop principal
     const int log_interval_ms = 500; // Intervalo de envio de logs
@@ -564,11 +590,12 @@ static void monitor_task_udp(void *arg) {
 
         // Enviar Logs (Periódico)
         if ((now_ms - last_log_send_time) >= log_interval_ms) {
-            int len = build_log_packet(payload, sizeof(payload));
+            int len = build_log_packet(payload, sizeof(payload), s_udp_seq);
             int64_t send_time = esp_timer_get_time(); // Timestamp de envio para RTT
 
             sendto(sock, payload, len, 0, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
             last_log_send_time = now_ms;
+            s_udp_seq++; // Incrementa o sequenciador
 
             // Tentativa de Receber Resposta Imediata para RTT (Requer que o Servidor PC responda)
             struct sockaddr_in source_addr; 
@@ -613,6 +640,9 @@ static void monitor_task_tcp(void *arg) {
     const int loop_delay_ms   = 50;  // Delay do loop principal
     const int log_interval_ms = 500; // Intervalo de envio de logs
 
+    // Variável estática para o número de sequência do TCP
+    static int s_tcp_seq = 0;
+
     // Configura o endereço do Servidor (PC)
     struct sockaddr_in dest_addr = {0};
     dest_addr.sin_family = AF_INET;
@@ -631,9 +661,9 @@ static void monitor_task_tcp(void *arg) {
 
         // Tenta conectar ao PC (Servidor)
         if (connect(sock, (struct sockaddr*)&dest_addr, sizeof(dest_addr)) != 0) {
-            ESP_LOGE(TAG, "MONITOR (TCP): Falha ao conectar. Tentando novamente em 5s...");
+            ESP_LOGE(TAG, "MONITOR (TCP): Falha ao conectar. Tentando novamente em 1s...");
             close(sock);
-            vTaskDelay(pdMS_TO_TICKS(5000));
+            vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
 
@@ -645,52 +675,28 @@ static void monitor_task_tcp(void *arg) {
         
         int64_t last_log_send_time = 0;
 
-        while (1) { // Loop de comunicação
+        // Loop de comunicação
+        while (1) {
             vTaskDelay(pdMS_TO_TICKS(loop_delay_ms)); // Loop rápido
-
-            if (led_off_time > 0 && esp_timer_get_time() >= led_off_time) {
-                gpio_set_level(LED_GPIO, 0);
-                led_off_time = 0;
-            }
 
             int64_t now = esp_timer_get_time() / 1000; // Tempo atual em ms
 
             // Enviar Logs (periódico)
             if ((now - last_log_send_time) >= log_interval_ms) {
-                // Para RTT no TCP: o timestamp de envio é anexado ao JSON
-                int len = build_log_packet(payload, sizeof(payload));
-    
-                int64_t send_time = esp_timer_get_time(); // Timestamp de envio para RTT
-                int bytes_sent = send(sock, payload, len, 0);
+                int64_t send_time = esp_timer_get_time(); // Pega o timestamp de envio
+                
+                // Armazena o timestamp de envio no buffer global, usando 'seq' como índice
+                g_tcp_rtt_send_times[s_tcp_seq & (TCP_RTT_BUFFER_SIZE - 1)] = send_time;
 
-                if (bytes_sent > 0) {
-                    struct timeval rtt_tv = {0, 50 * 1000}; // Espera o ECO por 50ms
-                    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &rtt_tv, sizeof(rtt_tv));
-                    
-                    // Espera pela resposta 'ECO'
-                    int len_resp = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
-
-                    struct timeval fast_tv = {0, 1000}; // 1ms
-                    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &fast_tv, sizeof(fast_tv));
-
-                    if (len_resp > 0) { // Resposta ECO recebida (ou outro pacote)
-                        int64_t rtt = (esp_timer_get_time() - send_time) / 1000; // RTT em ms
-                        rtt_count++;
-                        rtt_sum += rtt;
-                        if (rtt > rtt_max) rtt_max = rtt;
-                        
-                        ESP_LOGI(TAG, "MONITOR (TCP): RTT medido: %lld ms", rtt);
-                    } else if (len_resp == 0) {
-                        // Conexão fechada durante a espera pelo ECO
-                        ESP_LOGW(TAG, "MONITOR (TCP): Conexão fechada pelo PC durante medição RTT.");
-                        break; 
-                    } // Se len_resp < 0, foi timeout ou erro, RTT falhou (ignorar o sample)
-
-                    last_log_send_time = now;
-                } else if (bytes_sent < 0) {
+                // Passa o 's_tcp_seq' atual para o builder
+                int len = build_log_packet(payload, sizeof(payload), s_tcp_seq); 
+                
+                if (send(sock, payload, len, 0) < 0) {
                     ESP_LOGE(TAG, "MONITOR (TCP): Falha no envio. Conexão perdida.");
                     break; // Sai do loop de comunicação para reconectar
                 }
+                last_log_send_time = now;
+                s_tcp_seq++; // Incrementa o sequenciador
             }
 
             // Receber Comandos (não-bloqueante) 
@@ -698,12 +704,31 @@ static void monitor_task_tcp(void *arg) {
 
             if (len > 0) { // Comando recebido
                 rx_buffer[len] = 0;
-                // Ignora o ECO do servidor para não ser processado como comando
-                if (strncmp(rx_buffer, "ECO", 3) != 0) { 
-                    process_command(rx_buffer);
+
+                // Verifica se é uma resposta "ECO:" para RTT ou um comando
+                if (strncmp(rx_buffer, "ECO:", 4) == 0) {
+                    int recv_seq = atoi(rx_buffer + 4);
+                    
+                    // Busca o timestamp de envio original
+                    int64_t send_time = g_tcp_rtt_send_times[recv_seq & (TCP_RTT_BUFFER_SIZE - 1)];
+
+                    if (send_time > 0) { // Se for 0, é um timestamp antigo ou inválido
+                        // Calcula o RTT em ms
+                        int64_t rtt = (esp_timer_get_time() - send_time) / 1000; 
+
+                        // Atualiza as estatísticas globais de RTT
+                        rtt_count++;
+                        rtt_sum += rtt;
+                        if (rtt > rtt_max) rtt_max = rtt;
+                        
+                        ESP_LOGI(TAG, "MONITOR (TCP): RTT de %lld ms (seq=%d)", rtt, recv_seq);
+
+                        // Invalida o timestamp para não ser usado novamente
+                        g_tcp_rtt_send_times[recv_seq & (TCP_RTT_BUFFER_SIZE - 1)] = 0;
+                    }
                 } else {
-                    // Caso o ECO tenha sido lido pelo loop rápido
-                    ESP_LOGI(TAG, "MONITOR (TCP): ECO descartado no loop rápido.");
+                    // Não é um ECO, processa como um comando normal
+                    process_command(rx_buffer);
                 }
             } else if (len == 0) { // Conexão fechada pelo Servidor (PC)
                 ESP_LOGW(TAG, "MONITOR (TCP): Conexão fechada pelo PC.");
@@ -819,31 +844,31 @@ void task_report(void *pvParameters) {
     printf("  - Total Hard Misses: %d\n", fus_imu_misses + ctrl_att_misses + fs_task_misses);
     printf("  - Total Soft Misses: %d\n", nav_plan_misses);
 
-    // Total geral de bloqueios
+    // Total de bloqueios
     int total_blocks = g_blocks.fus_imu_blocks + g_blocks.ctrl_att_blocks + 
-                       g_blocks.nav_plan_blocks + g_blocks.perturbation_blocks + 
-                       g_blocks.time_blocks;
+                       g_blocks.nav_plan_blocks + g_blocks.time_blocks + 
+                       g_blocks.perturbation_blocks;
 
+    // Análise de Bloqueio e Inversão de Prioridade
     printf("----------------------------------------------\n");
     printf("Análise de Bloqueio e Inversão de Prioridade:\n");
     printf("  - Total Geral de Bloqueios: %d\n", total_blocks);
-    printf("\n");
     printf("  Bloqueios por Tarefa (xStateMutex):\n");
     printf("    • FUS_IMU:       %d bloqueios\n", g_blocks.fus_imu_blocks);
     printf("    • CTRL_ATT:      %d bloqueios\n", g_blocks.ctrl_att_blocks);
     printf("    • NAV_PLAN:      %d bloqueios\n", g_blocks.nav_plan_blocks);
     printf("    • PERTURBATION:  %d bloqueios\n", g_blocks.perturbation_blocks);
-    printf("\n");
     printf("  Bloqueios em Outros Mutexes:\n");
     printf("    • TIME_TASK (xTimeMutex): %d bloqueios\n", g_blocks.time_blocks);
-    printf("\n");
 
-    // WCRT/Latência de Eventos e Execução
+    // WCRT (Pior Tempo de Resposta e Execução)
     printf("----------------------------------------------\n");
-    printf("WCRT de Execução (Tempo Real Mais Longo):\n");
-    printf("  - FUS_IMU (Execução): %lld ms (D=5ms)\n", fus_imu_wcrt_exec);
-    printf("  - CTRL_ATT (Execução): %lld ms (D=5ms)\n", ctrl_att_wcrt_exec);
-    printf("Latência de Eventos (ISR -> Tarefa):\n");
+    printf("WCRT - Pior Tempo Registrado:\n");
+    printf("  - FUS_IMU (Execução C): %lld ms (D=5ms)\n", fus_imu_wcrt_exec);
+    printf("  - CTRL_ATT (Execução C): %lld ms (D=5ms)\n", ctrl_att_wcrt_exec);
+    printf("  - NAV_PLAN (Resposta L+C): %lld ms (D=20ms)\n", nav_plan_wcrt_response);
+    printf("  - FS_TASK (Resposta L+C): %lld ms (D=10ms)\n", fs_task_wcrt_response);
+    printf("Latência de Eventos (ISR -> Tarefa Iniciar):\n");
 
     // Latência da Navegação/Telemetria (Touch B/C)
     int64_t nav_latency_avg = (nav_event_count > 0) ? (nav_latency_sum / nav_event_count) : 0;
@@ -861,7 +886,7 @@ void task_report(void *pvParameters) {
     printf("----------------------------------------------\n");
     printf("HWM (High Water Mark) - Latência de Eventos:\n");
     
-    // Cálculos de HWM 99%
+    // Chamadas diretas à função auxiliar (REMOVENDO O AUTO)
     int64_t fs_hwm99 = calculate_hwm_value(fs_latencies, fs_event_count, 0.99f);
     int64_t nav_hwm99 = calculate_hwm_value(nav_latencies, nav_event_count, 0.99f);
 
@@ -870,38 +895,49 @@ void task_report(void *pvParameters) {
     } else {
         printf("  - Fail-Safe (HWM 99%%): %lld ms\n", fs_hwm99);
     }
-    
     if (nav_hwm99 < 0) {
         printf("  - Navegação (HWM 99%%): N/A (amostras insuficientes)\n");
     } else {
         printf("  - Navegação (HWM 99%%): %lld ms\n", nav_hwm99);
     }
 
-    // Outros parâmetros
+    // Outros Parâmetros
     printf("----------------------------------------------\n");
     printf("Outros Parâmetros:\n");
 
-    // Resultado do (m,k)-firm: Janela Deslizante
-    printf("  - (m,k)-firm (Janela Deslizante):\n");
-    printf("      Janela k = %d; Requisito m = %d ((%d,%d)-firm)\n", K_WINDOW_SIZE, NAV_M_MIN, NAV_M_MIN, K_WINDOW_SIZE);
-    printf("      Total de Falhas na Janela:  %d\n", mk_firm_failures);
-    
-    // Mantendo a taxa global para referência estatística no relatório (item c)
+    // (m,k)-firm
     if (nav_total_runs > 0) {
-        float success_rate = (float)nav_total_success / nav_total_runs * 100.0f;
-        printf("Taxa de Sucesso Global: %.2f%% (%llu/%llu)\n", 
-            success_rate, (unsigned long long)nav_total_success, (unsigned long long)nav_total_runs);
+        // Janela Deslizante Final
+        // Pega a contagem atual da janela. Se a janela não estiver cheia, usa o total de 'runs'.
+        int final_k = (nav_total_runs < K_WINDOW_SIZE) ? nav_total_runs : K_WINDOW_SIZE;
+        float final_rate = (final_k > 0) ? (float)nav_window_success_count / final_k * 100.0f : 0.0f;
+        printf("  - (m,k)-firm (Janela Deslizante Final): (%d, %d) -> %.2f%% Sucesso\n",
+               nav_window_success_count, final_k, final_rate);
+
+        // Taxa Total
+        float total_rate = (float)nav_total_success / nav_total_runs * 100.0f;
+        printf("  - (m,k)-firm (Taxa Total): (%llu, %llu) -> %.2f%% Sucesso\n",
+               (unsigned long long)nav_total_success, (unsigned long long)nav_total_runs, total_rate);
+
+        // Violações
+        printf("  - Violações (m,k)-firm: %d vezes\n", nav_violation_count);
+
     } else {
-        printf("Taxa de Sucesso Global: N/A (Nenhum evento NAV_PLAN registrado).\n");
+        printf("  - (m,k)-firm: Nenhum evento NAV_PLAN registrado.\n");
     }
 
     // Latência Protocolo (RTT)
     int64_t rtt_latency_avg = (rtt_count > 0) ? (rtt_sum / rtt_count) : 0;
     printf("  - Latência Protocolo (RTT) Média: %lld ms\n", rtt_latency_avg); 
     printf("  - Latência Protocolo (RTT) Máxima: %lld ms\n", rtt_max);
-    
-    // Análise de Bloqueio/Interferência
-    printf("  - Contagem de Bloqueio (Inversão de Prioridade): %d\n", total_blocks);
+    printf("  - Total de Medições RTT: %llu\n", (unsigned long long)rtt_count);
+
+    // Observação do Protocolo
+    #ifdef MONITOR_MODE_TCP
+        printf("  - Observação TCP: RTT medido via timestamp no JSON\n");
+    #else
+        printf("  - Observação UDP: RTT medido via ECO de pacote\n");
+    #endif
     printf("==============================================\n");
 
     // Deleta a si mesma, as outras tarefas continuam.
@@ -960,13 +996,13 @@ void app_main(void) {
     touch_pad_intr_enable();
 
     // Cria as tarefas e entrega o controle ao escalonador do FreeRTOS.
-    xTaskCreatePinnedToCore(task_fail_safe,      "FS_TASK",      STK, NULL, PRIO_FS_TASK,  &hFS,   0);
-    xTaskCreatePinnedToCore(task_fus_imu,        "FUS_IMU",      STK, NULL, PRIO_FUS_IMU,  &hFUS,  0);
-    xTaskCreatePinnedToCore(task_ctrl_att,       "CTRL_ATT",     STK, NULL, PRIO_CTRL_ATT, &hCTRL, 0);
-    xTaskCreatePinnedToCore(task_nav_plan,       "NAV_PLAN",     STK, NULL, PRIO_NAV_PLAN, &hNAV,  0);
-    xTaskCreatePinnedToCore(task_perturbation,   "PERTURB_TASK", STK, NULL, PRIO_PERTURBATION, NULL, 0);
-    xTaskCreatePinnedToCore(time_task,           "TIME_TASK",   4096, NULL, PRIO_TIME, NULL, 0);
-    xTaskCreatePinnedToCore(task_report,         "REPORT_TASK", 4096, NULL, 2, NULL, 0);
+    xTaskCreatePinnedToCore(task_fail_safe,    "FS_TASK",      STK, NULL, PRIO_FS_TASK,  &hFS,   0);
+    xTaskCreatePinnedToCore(task_fus_imu,      "FUS_IMU",      STK, NULL, PRIO_FUS_IMU,  &hFUS,  0);
+    xTaskCreatePinnedToCore(task_ctrl_att,     "CTRL_ATT",     STK, NULL, PRIO_CTRL_ATT, &hCTRL, 0);
+    xTaskCreatePinnedToCore(task_nav_plan,     "NAV_PLAN",     STK, NULL, PRIO_NAV_PLAN, &hNAV,  0);
+    xTaskCreatePinnedToCore(task_perturbation, "PERTURB_TASK", STK, NULL, PRIO_PERTURBATION, NULL, 0);
+    xTaskCreatePinnedToCore(time_task,         "TIME_TASK",   4096, NULL, PRIO_TIME, NULL, 0);
+    xTaskCreatePinnedToCore(task_report,       "REPORT_TASK", 4096, NULL, 2, NULL, 0);
 
     // Cria a MONITOR_TASK com base no #define
     #ifdef MONITOR_MODE_TCP

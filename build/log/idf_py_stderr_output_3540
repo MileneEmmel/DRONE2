@@ -1,0 +1,18 @@
+Command: cmake -G Ninja -DPYTHON_DEPS_CHECKED=1 -DPYTHON=c:\Users\milen\Drone2\DRONE\python_env\idf6.0_py3.11_env\Scripts\python.exe -DESP_PLATFORM=1 -DSDKCONFIG='c:\Users\milen\Drone2\DRONE\hello_world\sdkconfig' -DCCACHE_ENABLE=1 C:\Users\milen\Drone2\DRONE\hello_world
+Configuration Report                                                           
++-----------------------------------------------------------------------------+
+|  Parser Version: 1                                                          |
+|  Verbosity: default                                                         |
+|  Defaults policy: sdkconfig                                                 |
+|  Status: Finished with notifications                                        |
+|                                                                             |
+| Miscellaneous                                                               |
+| +-------------------------------------------------------------------------+ |
+| | * Trying to set symbol COMPILER_ORPHAN_SECTIONS_ERROR to n, but it is   | |
+| | currently selected by choice COMPILER_ORPHAN_SECTIONS. For setting it   | |
+| | to n, set another choice symbol to y instead.                           | |
+| | * Trying to set symbol ESP_DEFAULT_CPU_FREQ_MHZ_160 to n, but it is     | |
+| | currently selected by choice ESP_DEFAULT_CPU_FREQ_MHZ. For setting it   | |
+| | to n, set another choice symbol to y instead.                           | |
+| +-------------------------------------------------------------------------+ |
++-----------------------------------------------------------------------------+
