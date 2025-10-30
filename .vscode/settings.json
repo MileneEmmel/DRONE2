@@ -1,0 +1,14 @@
+{
+  "C_Cpp.intelliSenseEngine": "default",
+  "idf.espIdfPathWin": "C:\\Users\\ddani\\esp\\v5.5.1\\esp-idf",
+  "idf.toolsPathWin": "C:\\Users\\ddani\\.espressif",
+  "idf.pythonInstallPath": "C:\\Users\\ddani\\.espressif\\tools\\idf-python\\3.11.2\\python.exe",
+  "files.associations": {
+    "nvs_flash.h": "c",
+    "esp_sntp.h": "c",
+    "chrono": "c",
+    "freertosconfig.h": "c"
+  },
+  "idf.portWin": "COM3",
+  "idf.flashType": "UART"
+}
